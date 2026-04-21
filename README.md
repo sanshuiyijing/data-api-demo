@@ -11,6 +11,7 @@ This repository includes one PR automation under `.github/workflows`:
 ### Required setup
 
 - If your Codex bot login is not `codex[bot]` or `chatgpt-codex-connector[bot]`, update `CODEX_BOT_LOGINS` in `auto-approve-bot-thumbs-up.yml`.
+- Add the repository secret `PR_APPROVER_TOKEN`. This must be a GitHub App installation token or personal access token that is allowed to submit PR approvals in this repository; the default `GITHUB_TOKEN` is not sufficient here.
 
 ### Review source
 
