@@ -1,0 +1,157 @@
+name: Auto Approve Bot Thumbs Up
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, edited, ready_for_review]
+  issue_comment:
+    types: [created, edited]
+  pull_request_review_comment:
+    types: [created, edited]
+  pull_request_review:
+    types: [submitted, edited]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: auto-approve-bot-thumbs-up-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: true
+
+jobs:
+  auto-approve:
+    if: >
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request) ||
+      github.event_name == 'pull_request_review_comment' ||
+      github.event_name == 'pull_request_review'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Approve PR when Codex bot leaves thumbs-up
+        uses: actions/github-script@v7
+        env:
+          CODEX_BOT_LOGINS: codex[bot],chatgpt-codex-connector[bot]
+          APPROVE_TRIGGERS: '👍,:+1:,:thumbsup:,:thumbs_up:,thumbs up'
+        with:
+          script: |
+            const marker = '<!-- auto-approve-bot-thumbs-up -->';
+            const { owner, repo } = context.repo;
+
+            const pullNumber =
+              context.payload.pull_request?.number ??
+              context.payload.issue?.number;
+
+            if (!pullNumber) {
+              core.info('No pull request number found in event payload.');
+              return;
+            }
+
+            const pr = await github.rest.pulls.get({
+              owner,
+              repo,
+              pull_number: pullNumber,
+            });
+
+            if (pr.data.draft) {
+              core.info('Pull request is draft. Skipping auto-approve.');
+              return;
+            }
+
+            const normalize = (value) =>
+              (value || '')
+                .toLowerCase()
+                .normalize('NFKC')
+                .replace(/[\u{1F3FB}-\u{1F3FF}]/gu, '')
+                .replace(/\uFE0F/gu, '');
+
+            const botLogins = (process.env.CODEX_BOT_LOGINS || '')
+              .split(',')
+              .map((value) => value.trim().toLowerCase())
+              .filter(Boolean);
+
+            const triggers = (process.env.APPROVE_TRIGGERS || '')
+              .split(',')
+              .map((value) => value.trim())
+              .filter(Boolean);
+
+            const normalizedTriggers = triggers.map((trigger) => ({
+              raw: trigger,
+              normalized: normalize(trigger),
+            }));
+
+            const commentMatches = (item) => {
+              const login = item.user?.login?.toLowerCase();
+              if (!login || !botLogins.includes(login)) {
+                return null;
+              }
+
+              const body = normalize(item.body);
+              if (!body) {
+                return null;
+              }
+
+              const trigger = normalizedTriggers.find(({ normalized }) =>
+                body.includes(normalized)
+              );
+
+              if (!trigger) {
+                return null;
+              }
+
+              return {
+                login,
+                trigger: trigger.raw,
+              };
+            };
+
+            const [issueComments, reviewComments, reviews] = await Promise.all([
+              github.paginate(github.rest.issues.listComments, {
+                owner,
+                repo,
+                issue_number: pullNumber,
+                per_page: 100,
+              }),
+              github.paginate(github.rest.pulls.listReviewComments, {
+                owner,
+                repo,
+                pull_number: pullNumber,
+                per_page: 100,
+              }),
+              github.paginate(github.rest.pulls.listReviews, {
+                owner,
+                repo,
+                pull_number: pullNumber,
+                per_page: 100,
+              }),
+            ]);
+
+            const matchedSource = [...issueComments, ...reviewComments, ...reviews]
+              .map((item) => ({ item, match: commentMatches(item) }))
+              .find(({ match }) => Boolean(match));
+
+            if (!matchedSource) {
+              core.info('No matching Codex bot thumbs-up comment found.');
+              return;
+            }
+
+            const alreadyApproved = reviews.some(
+              (review) =>
+                review.state === 'APPROVED' &&
+                review.user?.login === 'github-actions[bot]' &&
+                (review.body || '').includes(marker)
+            );
+
+            if (alreadyApproved) {
+              core.info('PR already has the workflow approval.');
+              return;
+            }
+
+            await github.rest.pulls.createReview({
+              owner,
+              repo,
+              pull_number: pullNumber,
+              event: 'APPROVE',
+              body: `${marker}\nApproved because ${matchedSource.match.login} posted ${matchedSource.match.trigger}.`,
+            });
+
+            core.info(`Approved PR #${pullNumber} after ${matchedSource.match.login} posted ${matchedSource.match.trigger}.`);
