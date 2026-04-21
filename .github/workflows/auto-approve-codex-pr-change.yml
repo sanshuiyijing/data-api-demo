@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   auto-approve-on-pr-change:
-    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.pull_requests != null && github.event.workflow_run.pull_requests.length > 0
+    if: github.event.workflow_run.conclusion == 'success' && toJSON(github.event.workflow_run.pull_requests) != 'null' && toJSON(github.event.workflow_run.pull_requests) != '[]'
     runs-on: ubuntu-latest
     steps:
       - name: Scan PR comments for bot approve triggers and auto-approve
@@ -22,6 +22,12 @@ jobs:
           script: |
             const botLoginsEnv = (process.env.CODEX_BOT_LOGINS || 'codex[bot]').split(',').map(s => s.trim()).filter(Boolean).map(s=>s.toLowerCase());
             const emojisEnv = (process.env.APPROVE_EMOJIS || '👍').split(',').map(s => s.trim()).filter(Boolean);
+            const emojiAliases = new Map([
+              ['👍', ['👍', ':+1:', ':thumbsup:', ':thumbs_up:', 'thumbs up']],
+            ]);
+            const approveTriggers = [...new Set(
+              emojisEnv.flatMap(emoji => emojiAliases.get(emoji) || [emoji])
+            )];
             const owner = context.repo.owner;
             const repo = context.repo.repo;
 
@@ -38,7 +44,8 @@ jobs:
               if (!c || !c.user || !c.user.login || !c.body) return false;
               const login = c.user.login.toLowerCase();
               if (!botLoginsEnv.includes(login)) return false;
-              return emojisEnv.some(e => c.body.includes(e));
+              const body = c.body.toLowerCase();
+              return approveTriggers.some(trigger => body.includes(trigger.toLowerCase()));
             }
 
             const commentsRes = await github.rest.issues.listComments({ owner, repo, issue_number: pull_number });
@@ -58,5 +65,5 @@ jobs:
               return;
             }
 
-            await github.rest.pulls.createReview({ owner, repo, pull_number, event: 'APPROVE', body: `Auto-approved because ${matched.user.login} commented with one of ${emojisEnv.join(', ')}.` });
+            await github.rest.pulls.createReview({ owner, repo, pull_number, event: 'APPROVE', body: `Auto-approved because ${matched.user.login} commented with one of ${approveTriggers.join(', ')}.` });
             console.log('Created APPROVE review on PR.');
