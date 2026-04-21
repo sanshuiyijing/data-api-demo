@@ -64,6 +64,17 @@ jobs:
               pull_number: pullNumber,
             });
 
+            const authenticatedUser = await github.rest.users.getAuthenticated();
+            const approverLogin = authenticatedUser.data.login?.toLowerCase();
+            const prAuthorLogin = pr.data.user?.login?.toLowerCase();
+
+            if (approverLogin && prAuthorLogin && approverLogin === prAuthorLogin) {
+              core.setFailed(
+                `PR_APPROVER_TOKEN belongs to ${authenticatedUser.data.login}, which is also the PR author. GitHub does not allow approving your own pull request. Use a different bot/service account token.`
+              );
+              return;
+            }
+
             if (pr.data.draft) {
               core.info('Pull request is draft. Skipping auto-approve.');
               return;
