@@ -12,6 +12,7 @@ on:
 
 permissions:
   contents: read
+  issues: read
   pull-requests: write
 
 concurrency:
@@ -105,12 +106,13 @@ jobs:
               };
             };
 
-            const reactionMatches = async (items, listReactions) => {
+            const reactionMatches = async (items, listReactions, buildParams = (item) => ({ comment_id: item.id })) => {
               for (const item of items) {
                 const reactions = await github.paginate(listReactions, {
                   owner,
                   repo,
-                  comment_id: item.id,
+                  ...buildParams(item),
+                  content: '+1',
                   per_page: 100,
                   mediaType: {
                     previews: ['squirrel-girl'],
@@ -132,6 +134,34 @@ jobs:
               }
 
               return null;
+            };
+
+            const issueReactionMatches = async () => {
+              const reactions = await github.paginate(github.rest.reactions.listForIssue, {
+                owner,
+                repo,
+                issue_number: pullNumber,
+                content: '+1',
+                per_page: 100,
+                mediaType: {
+                  previews: ['squirrel-girl'],
+                },
+              });
+
+              const match = reactions.find((reaction) => {
+                const login = reaction.user?.login?.toLowerCase();
+                return login && botLogins.includes(login) && reaction.content === '+1';
+              });
+
+              if (!match) {
+                return null;
+              }
+
+              return {
+                source: 'issue-reaction',
+                login: match.user.login.toLowerCase(),
+                trigger: '+1',
+              };
             };
 
             const [issueComments, reviewComments, reviews] = await Promise.all([
@@ -160,6 +190,7 @@ jobs:
               .find(({ match }) => Boolean(match));
 
             const matchedReaction =
+              (await issueReactionMatches()) ||
               (await reactionMatches(
                 issueComments,
                 github.rest.reactions.listForIssueComment
@@ -175,6 +206,7 @@ jobs:
                 : null);
 
             if (!matchedSource) {
+              core.info(`Scanned ${issueComments.length} issue comments, ${reviewComments.length} review comments, and ${reviews.length} reviews for Codex thumbs-up signals.`);
               core.info('No matching Codex bot thumbs-up signal found.');
               return;
             }
