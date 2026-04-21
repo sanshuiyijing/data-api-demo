@@ -1,74 +1,74 @@
-# name: Auto-approve Codex reviews
+name: Auto-approve Codex reviews
 
-# on:
-#   issue_comment:
-#     types: [created, edited]
-#   pull_request:
-#     types: [opened, reopened, edited, synchronize]
+on:
+  issue_comment:
+    types: [created, edited]
+  pull_request:
+    types: [opened, reopened, edited, synchronize]
 
-# permissions:
-#   pull-requests: write
+permissions:
+  pull-requests: write
 
-# jobs:
-#   auto-approve:
-#     if: github.event.issue.pull_request != null
-#     runs-on: ubuntu-latest
-#     steps:
-#       - name: Auto-approve when Codex posts thumbs-up
-#         uses: actions/github-script@v6
-#         env:
-#           # Comma separated list of bot logins that are allowed to trigger approve. Example: "codex[bot],my-codex-bot"
-#           CODEX_BOT_LOGINS: codex[bot]
-#           # Comma separated list of emoji/text triggers. Example: "👍,LGTM,approved"
-#           APPROVE_EMOJIS: '👍'
-#         with:
-#           script: |
-#             // context and github are provided by actions/github-script
-#             const comment = context.payload.comment;
-#             const issue = context.payload.issue;
-#             if (!issue || !issue.pull_request) {
-#               console.log('Not a pull request comment — exiting.');
-#               return;
-#             }
+jobs:
+  auto-approve:
+    if: github.event.issue.pull_request != null
+    runs-on: ubuntu-latest
+    steps:
+      - name: Auto-approve when Codex posts thumbs-up
+        uses: actions/github-script@v6
+        env:
+          # Comma separated list of bot logins that are allowed to trigger approve. Example: "codex[bot],my-codex-bot"
+          CODEX_BOT_LOGINS: codex[bot]
+          # Comma separated list of emoji/text triggers. Example: "👍,LGTM,approved"
+          APPROVE_EMOJIS: '👍'
+        with:
+          script: |
+            // context and github are provided by actions/github-script
+            const comment = context.payload.comment;
+            const issue = context.payload.issue;
+            if (!issue || !issue.pull_request) {
+              console.log('Not a pull request comment — exiting.');
+              return;
+            }
 
-#             const commentBody = (comment && comment.body) || '';
-#             const commentUser = (comment && comment.user && comment.user.login) || '';
+            const commentBody = (comment && comment.body) || '';
+            const commentUser = (comment && comment.user && comment.user.login) || '';
 
-#             const botLoginsEnv = (process.env.CODEX_BOT_LOGINS || 'codex[bot]').split(',').map(s => s.trim()).filter(Boolean).map(s=>s.toLowerCase());
-#             const emojisEnv = (process.env.APPROVE_EMOJIS || '👍').split(',').map(s => s.trim()).filter(Boolean);
+            const botLoginsEnv = (process.env.CODEX_BOT_LOGINS || 'codex[bot]').split(',').map(s => s.trim()).filter(Boolean).map(s=>s.toLowerCase());
+            const emojisEnv = (process.env.APPROVE_EMOJIS || '👍').split(',').map(s => s.trim()).filter(Boolean);
 
-#             const commenterLower = commentUser.toLowerCase();
-#             if (!botLoginsEnv.includes(commenterLower)) {
-#               console.log(`Commenter ${commentUser} is not in configured bot list (${botLoginsEnv.join(', ')}). Exiting.`);
-#               return;
-#             }
+            const commenterLower = commentUser.toLowerCase();
+            if (!botLoginsEnv.includes(commenterLower)) {
+              console.log(`Commenter ${commentUser} is not in configured bot list (${botLoginsEnv.join(', ')}). Exiting.`);
+              return;
+            }
 
-#             // Check if comment includes any of the configured triggers
-#             const matched = emojisEnv.some(e => commentBody.includes(e));
-#             if (!matched) {
-#               console.log(`Comment does not include any configured approve triggers (${emojisEnv.join(', ')}). Exiting.`);
-#               return;
-#             }
+            // Check if comment includes any of the configured triggers
+            const matched = emojisEnv.some(e => commentBody.includes(e));
+            if (!matched) {
+              console.log(`Comment does not include any configured approve triggers (${emojisEnv.join(', ')}). Exiting.`);
+              return;
+            }
 
-#             const owner = context.repo.owner;
-#             const repo = context.repo.repo;
-#             const pull_number = issue.number;
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const pull_number = issue.number;
 
-#             // Avoid duplicate approvals from the same bot (or configured bot list)
-#             const reviewsRes = await github.rest.pulls.listReviews({ owner, repo, pull_number });
-#             const alreadyApproved = reviewsRes.data.some(r => r.user && r.user.login && botLoginsEnv.includes(r.user.login.toLowerCase()) && r.state === 'APPROVED');
-#             if (alreadyApproved) {
-#               console.log('Pull request already approved by one of the configured bots. No action needed.');
-#               return;
-#             }
+            // Avoid duplicate approvals from the same bot (or configured bot list)
+            const reviewsRes = await github.rest.pulls.listReviews({ owner, repo, pull_number });
+            const alreadyApproved = reviewsRes.data.some(r => r.user && r.user.login && botLoginsEnv.includes(r.user.login.toLowerCase()) && r.state === 'APPROVED');
+            if (alreadyApproved) {
+              console.log('Pull request already approved by one of the configured bots. No action needed.');
+              return;
+            }
 
-#             // Create an approval review
-#             await github.rest.pulls.createReview({
-#               owner,
-#               repo,
-#               pull_number,
-#               event: 'APPROVE',
-#               body: `Auto-approved because a configured bot commented with one of ${emojisEnv.join(', ')}.`
-#             });
-#             console.log('Created APPROVE review on PR.');
+            // Create an approval review
+            await github.rest.pulls.createReview({
+              owner,
+              repo,
+              pull_number,
+              event: 'APPROVE',
+              body: `Auto-approved because a configured bot commented with one of ${emojisEnv.join(', ')}.`
+            });
+            console.log('Created APPROVE review on PR.');
  
