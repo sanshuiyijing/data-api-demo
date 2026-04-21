@@ -99,9 +99,39 @@ jobs:
               }
 
               return {
+                source: 'comment-body',
                 login,
                 trigger: trigger.raw,
               };
+            };
+
+            const reactionMatches = async (items, listReactions) => {
+              for (const item of items) {
+                const reactions = await github.paginate(listReactions, {
+                  owner,
+                  repo,
+                  comment_id: item.id,
+                  per_page: 100,
+                  mediaType: {
+                    previews: ['squirrel-girl'],
+                  },
+                });
+
+                const match = reactions.find((reaction) => {
+                  const login = reaction.user?.login?.toLowerCase();
+                  return login && botLogins.includes(login) && reaction.content === '+1';
+                });
+
+                if (match) {
+                  return {
+                    source: 'reaction',
+                    login: match.user.login.toLowerCase(),
+                    trigger: '+1',
+                  };
+                }
+              }
+
+              return null;
             };
 
             const [issueComments, reviewComments, reviews] = await Promise.all([
@@ -125,12 +155,27 @@ jobs:
               }),
             ]);
 
-            const matchedSource = [...issueComments, ...reviewComments, ...reviews]
+            const matchedComment = [...issueComments, ...reviewComments, ...reviews]
               .map((item) => ({ item, match: commentMatches(item) }))
               .find(({ match }) => Boolean(match));
 
+            const matchedReaction =
+              (await reactionMatches(
+                issueComments,
+                github.rest.reactions.listForIssueComment
+              )) ||
+              (await reactionMatches(
+                reviewComments,
+                github.rest.reactions.listForPullRequestReviewComment
+              ));
+
+            const matchedSource = matchedComment ||
+              (matchedReaction
+                ? { item: null, match: matchedReaction }
+                : null);
+
             if (!matchedSource) {
-              core.info('No matching Codex bot thumbs-up comment found.');
+              core.info('No matching Codex bot thumbs-up signal found.');
               return;
             }
 
@@ -151,7 +196,7 @@ jobs:
               repo,
               pull_number: pullNumber,
               event: 'APPROVE',
-              body: `${marker}\nApproved because ${matchedSource.match.login} posted ${matchedSource.match.trigger}.`,
+              body: `${marker}\nApproved because ${matchedSource.match.login} posted a matching ${matchedSource.match.source}: ${matchedSource.match.trigger}.`,
             });
 
-            core.info(`Approved PR #${pullNumber} after ${matchedSource.match.login} posted ${matchedSource.match.trigger}.`);
+            core.info(`Approved PR #${pullNumber} after ${matchedSource.match.login} posted a matching ${matchedSource.match.source}: ${matchedSource.match.trigger}.`);
