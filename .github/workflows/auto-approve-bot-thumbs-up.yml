@@ -37,11 +37,12 @@ jobs:
             exit 1
           fi
 
-      - name: Approve PR when Codex bot leaves thumbs-up
+      - name: Approve PR when Codex bot leaves approval signal
         uses: actions/github-script@v7
         env:
           CODEX_BOT_LOGINS: codex[bot],chatgpt-codex-connector[bot]
-          APPROVE_TRIGGERS: '👍,:+1:,:thumbsup:,:thumbs_up:,thumbs up'
+          APPROVE_TRIGGERS: '👍,:+1:,:thumbsup:,:thumbs_up:,thumbs up,eyes,👀'
+          APPROVE_REACTIONS: '+1,eyes'
           PR_APPROVER_TOKEN: ${{ secrets.PR_APPROVER_TOKEN }}
         with:
           github-token: ${{ secrets.PR_APPROVER_TOKEN }}
@@ -97,6 +98,11 @@ jobs:
               .map((value) => value.trim())
               .filter(Boolean);
 
+            const reactionTriggers = (process.env.APPROVE_REACTIONS || '+1')
+              .split(',')
+              .map((value) => value.trim().toLowerCase())
+              .filter(Boolean);
+
             const normalizedTriggers = triggers.map((trigger) => ({
               raw: trigger,
               normalized: normalize(trigger),
@@ -130,11 +136,43 @@ jobs:
 
             const reactionMatches = async (items, listReactions, buildParams = (item) => ({ comment_id: item.id })) => {
               for (const item of items) {
-                const reactions = await github.paginate(listReactions, {
+                for (const reactionTrigger of reactionTriggers) {
+                  const reactions = await github.paginate(listReactions, {
+                    owner,
+                    repo,
+                    ...buildParams(item),
+                    content: reactionTrigger,
+                    per_page: 100,
+                    mediaType: {
+                      previews: ['squirrel-girl'],
+                    },
+                  });
+
+                  const match = reactions.find((reaction) => {
+                    const login = reaction.user?.login?.toLowerCase();
+                    return login && botLogins.includes(login) && reaction.content === reactionTrigger;
+                  });
+
+                  if (match) {
+                    return {
+                      source: 'reaction',
+                      login: match.user.login.toLowerCase(),
+                      trigger: reactionTrigger,
+                    };
+                  }
+                }
+              }
+
+              return null;
+            };
+
+            const issueReactionMatches = async () => {
+              for (const reactionTrigger of reactionTriggers) {
+                const reactions = await github.paginate(github.rest.reactions.listForIssue, {
                   owner,
                   repo,
-                  ...buildParams(item),
-                  content: '+1',
+                  issue_number: pullNumber,
+                  content: reactionTrigger,
                   per_page: 100,
                   mediaType: {
                     previews: ['squirrel-girl'],
@@ -143,47 +181,19 @@ jobs:
 
                 const match = reactions.find((reaction) => {
                   const login = reaction.user?.login?.toLowerCase();
-                  return login && botLogins.includes(login) && reaction.content === '+1';
+                  return login && botLogins.includes(login) && reaction.content === reactionTrigger;
                 });
 
                 if (match) {
                   return {
-                    source: 'reaction',
+                    source: 'issue-reaction',
                     login: match.user.login.toLowerCase(),
-                    trigger: '+1',
+                    trigger: reactionTrigger,
                   };
                 }
               }
 
               return null;
-            };
-
-            const issueReactionMatches = async () => {
-              const reactions = await github.paginate(github.rest.reactions.listForIssue, {
-                owner,
-                repo,
-                issue_number: pullNumber,
-                content: '+1',
-                per_page: 100,
-                mediaType: {
-                  previews: ['squirrel-girl'],
-                },
-              });
-
-              const match = reactions.find((reaction) => {
-                const login = reaction.user?.login?.toLowerCase();
-                return login && botLogins.includes(login) && reaction.content === '+1';
-              });
-
-              if (!match) {
-                return null;
-              }
-
-              return {
-                source: 'issue-reaction',
-                login: match.user.login.toLowerCase(),
-                trigger: '+1',
-              };
             };
 
             const [issueComments, reviewComments, reviews] = await Promise.all([
@@ -228,8 +238,8 @@ jobs:
                 : null);
 
             if (!matchedSource) {
-              core.info(`Scanned ${issueComments.length} issue comments, ${reviewComments.length} review comments, and ${reviews.length} reviews for Codex thumbs-up signals.`);
-              core.info('No matching Codex bot thumbs-up signal found.');
+              core.info(`Scanned ${issueComments.length} issue comments, ${reviewComments.length} review comments, and ${reviews.length} reviews for Codex approval signals.`);
+              core.info('No matching Codex bot approval signal found.');
               return;
             }
 
