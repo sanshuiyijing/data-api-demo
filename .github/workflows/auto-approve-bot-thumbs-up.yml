@@ -158,6 +158,42 @@ jobs:
               return null;
             };
 
+            const reviewReactionMatches = async (items) => {
+              for (const item of items) {
+                for (const reactionTrigger of reactionTriggers) {
+                  const reactions = await github.paginate(
+                    github.rest.reactions.listForPullRequestReview,
+                    {
+                      owner,
+                      repo,
+                      pull_number: pullNumber,
+                      review_id: item.id,
+                      content: reactionTrigger,
+                      per_page: 100,
+                      mediaType: {
+                        previews: ['squirrel-girl'],
+                      },
+                    }
+                  );
+
+                  const match = reactions.find((reaction) => {
+                    const login = reaction.user?.login?.toLowerCase();
+                    return login && botLogins.includes(login) && reaction.content === reactionTrigger;
+                  });
+
+                  if (match) {
+                    return {
+                      source: 'review-reaction',
+                      login: match.user.login.toLowerCase(),
+                      trigger: reactionTrigger,
+                    };
+                  }
+                }
+              }
+
+              return null;
+            };
+
             const issueReactionMatches = async () => {
               for (const reactionTrigger of reactionTriggers) {
                 const reactions = await github.paginate(github.rest.reactions.listForIssue, {
@@ -217,6 +253,7 @@ jobs:
                 issueComments,
                 github.rest.reactions.listForIssueComment
               )) ||
+              (await reviewReactionMatches(reviews)) ||
               (await reactionMatches(
                 reviewComments,
                 github.rest.reactions.listForPullRequestReviewComment
