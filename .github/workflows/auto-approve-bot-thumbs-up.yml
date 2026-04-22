@@ -140,15 +140,63 @@ jobs:
                     },
                   });
 
+                  let matchedLogin = null;
                   const match = reactions.find((reaction) => {
                     const login = reaction.user?.login?.toLowerCase();
-                    return login && botLogins.includes(login) && reaction.content === reactionTrigger;
+                    if (login && botLogins.includes(login) && reaction.content === reactionTrigger) {
+                      matchedLogin = login;
+                      return true;
+                    }
+
+                    return false;
                   });
 
-                  if (match) {
+                  if (match && matchedLogin) {
                     return {
                       source: 'reaction',
-                      login: match.user.login.toLowerCase(),
+                      login: matchedLogin,
+                      trigger: reactionTrigger,
+                    };
+                  }
+                }
+              }
+
+              return null;
+            };
+
+            const reviewReactionMatches = async (items) => {
+              for (const item of items) {
+                for (const reactionTrigger of reactionTriggers) {
+                  const reactions = await github.paginate(
+                    github.rest.reactions.listForPullRequestReview,
+                    {
+                      owner,
+                      repo,
+                      pull_number: pullNumber,
+                      review_id: item.id,
+                      content: reactionTrigger,
+                      per_page: 100,
+                      mediaType: {
+                        previews: ['squirrel-girl'],
+                      },
+                    }
+                  );
+
+                  let matchedLogin = null;
+                  const match = reactions.find((reaction) => {
+                    const login = reaction.user?.login?.toLowerCase();
+                    if (login && botLogins.includes(login) && reaction.content === reactionTrigger) {
+                      matchedLogin = login;
+                      return true;
+                    }
+
+                    return false;
+                  });
+
+                  if (match && matchedLogin) {
+                    return {
+                      source: 'review-reaction',
+                      login: matchedLogin,
                       trigger: reactionTrigger,
                     };
                   }
@@ -171,15 +219,21 @@ jobs:
                   },
                 });
 
+                let matchedLogin = null;
                 const match = reactions.find((reaction) => {
                   const login = reaction.user?.login?.toLowerCase();
-                  return login && botLogins.includes(login) && reaction.content === reactionTrigger;
+                  if (login && botLogins.includes(login) && reaction.content === reactionTrigger) {
+                    matchedLogin = login;
+                    return true;
+                  }
+
+                  return false;
                 });
 
-                if (match) {
+                if (match && matchedLogin) {
                   return {
                     source: 'issue-reaction',
-                    login: match.user.login.toLowerCase(),
+                    login: matchedLogin,
                     trigger: reactionTrigger,
                   };
                 }
@@ -217,13 +271,15 @@ jobs:
                 issueComments,
                 github.rest.reactions.listForIssueComment
               )) ||
+              (await reviewReactionMatches(reviews)) ||
               (await reactionMatches(
                 reviewComments,
                 github.rest.reactions.listForPullRequestReviewComment
               ));
 
-            const matchedSource = matchedComment ||
-              (matchedReaction
+            const matchedSource = matchedComment
+              ? { item: null, match: matchedComment }
+              : (matchedReaction
                 ? { item: null, match: matchedReaction }
                 : null);
 
