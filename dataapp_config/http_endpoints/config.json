@@ -2,7 +2,7 @@
   {
     "name": "/test",
     "description": "",
-    "method": "GET",
+    "method": "xxx",
     "endpoint": "/test",
     "data_source": {
       "cluster_id": 10926655654297994062
@@ -10,7 +10,7 @@
     "params": [],
     "settings": {
       "timeout": 30000,
-      "row_limit": 1000,
+      "row_limit": 1000000000,
       "cache_enabled": 0,
       "cache_ttl": 0,
       "enable_pagination": 0
