@@ -42,8 +42,6 @@ jobs:
         env:
           CODEX_BOT_LOGINS: codex[bot],chatgpt-codex-connector[bot]
           APPROVE_REACTIONS: '+1'
-          APPROVE_COMMENT_PHRASES: "Didn't find any major issues."
-          APPROVE_COMMENT_BOT_LOGINS: chatgpt-codex-connector[bot]
           PR_APPROVER_TOKEN: ${{ secrets.PR_APPROVER_TOKEN }}
         with:
           github-token: ${{ secrets.PR_APPROVER_TOKEN }}
@@ -87,43 +85,44 @@ jobs:
               .map((value) => value.trim().toLowerCase())
               .filter(Boolean);
 
-            const commentApprovalPhrases = (process.env.APPROVE_COMMENT_PHRASES || '')
-              .split(',')
-              .map((value) => value.trim().toLowerCase())
-              .filter(Boolean);
-
-            const commentBotLogins = (process.env.APPROVE_COMMENT_BOT_LOGINS || '')
-              .split(',')
-              .map((value) => value.trim().toLowerCase())
-              .filter(Boolean);
-
             const reactionTriggers = (process.env.APPROVE_REACTIONS || '+1')
               .split(',')
               .map((value) => value.trim().toLowerCase())
               .filter(Boolean);
 
-            const commentMatches = (items) => {
-              for (const item of items) {
-                const login = item.user?.login?.toLowerCase();
-                if (!login || !commentBotLogins.includes(login)) {
-                  continue;
-                }
+            const hasP0Badge = (body) => /(^|\W)p0(\W|$)/i.test(body || '');
 
-                const body = (item.body || '').toLowerCase();
-                const matchedPhrase = commentApprovalPhrases.find((phrase) =>
-                  body.includes(phrase)
-                );
+            const getLatestMessage = (issueComments, reviewComments, reviews) => {
+              const messages = [
+                ...issueComments.map((item) => ({
+                  kind: 'issue-comment',
+                  login: item.user?.login?.toLowerCase() || null,
+                  body: item.body || '',
+                  timestamp: item.updated_at || item.created_at || null,
+                })),
+                ...reviewComments.map((item) => ({
+                  kind: 'review-comment',
+                  login: item.user?.login?.toLowerCase() || null,
+                  body: item.body || '',
+                  timestamp: item.updated_at || item.created_at || null,
+                })),
+                ...reviews.map((item) => ({
+                  kind: 'review',
+                  login: item.user?.login?.toLowerCase() || null,
+                  body: item.body || '',
+                  timestamp: item.submitted_at || item.updated_at || item.created_at || null,
+                })),
+              ].filter((item) => item.timestamp);
 
-                if (matchedPhrase) {
-                  return {
-                    source: 'comment-body',
-                    login,
-                    trigger: matchedPhrase,
-                  };
-                }
+              if (messages.length === 0) {
+                return null;
               }
 
-              return null;
+              messages.sort((left, right) =>
+                new Date(right.timestamp).getTime() - new Date(left.timestamp).getTime()
+              );
+
+              return messages[0];
             };
 
             const reactionMatches = async (items, listReactions, buildParams = (item) => ({ comment_id: item.id })) => {
@@ -263,8 +262,6 @@ jobs:
               }),
             ]);
 
-            const matchedComment = commentMatches([...issueComments, ...reviewComments, ...reviews]);
-
             const matchedReaction =
               (await issueReactionMatches()) ||
               (await reactionMatches(
@@ -277,11 +274,30 @@ jobs:
                 github.rest.reactions.listForPullRequestReviewComment
               ));
 
-            const matchedSource = matchedComment
-              ? { item: null, match: matchedComment }
-              : (matchedReaction
+            const latestMessage = getLatestMessage(issueComments, reviewComments, reviews);
+
+            let matchedSource = matchedReaction
                 ? { item: null, match: matchedReaction }
-                : null);
+                : null;
+
+            if (!matchedSource) {
+              if (!latestMessage) {
+                core.info('No comments or reviews found on the pull request.');
+              } else if (!latestMessage.login || !botLogins.includes(latestMessage.login)) {
+                core.info(`Latest message is from ${latestMessage.login || 'unknown'}, not a configured bot. Skipping auto-approve.`);
+              } else if (hasP0Badge(latestMessage.body)) {
+                core.info(`Latest bot message contains a P0 badge. Skipping auto-approve.`);
+              } else {
+                matchedSource = {
+                  item: latestMessage,
+                  match: {
+                    source: latestMessage.kind,
+                    login: latestMessage.login,
+                    trigger: 'latest-bot-message-without-p0',
+                  },
+                };
+              }
+            }
 
             if (!matchedSource) {
               core.info(`Scanned ${issueComments.length} issue comments, ${reviewComments.length} review comments, and ${reviews.length} reviews for Codex approval signals.`);
