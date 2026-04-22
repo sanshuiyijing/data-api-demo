@@ -277,8 +277,9 @@ jobs:
                 github.rest.reactions.listForPullRequestReviewComment
               ));
 
-            const matchedSource = matchedComment ||
-              (matchedReaction
+            const matchedSource = matchedComment
+              ? { item: null, match: matchedComment }
+              : (matchedReaction
                 ? { item: null, match: matchedReaction }
                 : null);
 
