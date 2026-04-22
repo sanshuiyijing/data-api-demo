@@ -41,7 +41,6 @@ jobs:
         uses: actions/github-script@v7
         env:
           CODEX_BOT_LOGINS: codex[bot],chatgpt-codex-connector[bot]
-          APPROVE_TRIGGERS: '👍,:+1:,:thumbsup:,:thumbs_up:,thumbs up,eyes,👀'
           APPROVE_REACTIONS: '+1,eyes'
           PR_APPROVER_TOKEN: ${{ secrets.PR_APPROVER_TOKEN }}
         with:
@@ -81,58 +80,15 @@ jobs:
               return;
             }
 
-            const normalize = (value) =>
-              (value || '')
-                .toLowerCase()
-                .normalize('NFKC')
-                .replace(/[\u{1F3FB}-\u{1F3FF}]/gu, '')
-                .replace(/\uFE0F/gu, '');
-
             const botLogins = (process.env.CODEX_BOT_LOGINS || '')
               .split(',')
               .map((value) => value.trim().toLowerCase())
-              .filter(Boolean);
-
-            const triggers = (process.env.APPROVE_TRIGGERS || '')
-              .split(',')
-              .map((value) => value.trim())
               .filter(Boolean);
 
             const reactionTriggers = (process.env.APPROVE_REACTIONS || '+1')
               .split(',')
               .map((value) => value.trim().toLowerCase())
               .filter(Boolean);
-
-            const normalizedTriggers = triggers.map((trigger) => ({
-              raw: trigger,
-              normalized: normalize(trigger),
-            }));
-
-            const commentMatches = (item) => {
-              const login = item.user?.login?.toLowerCase();
-              if (!login || !botLogins.includes(login)) {
-                return null;
-              }
-
-              const body = normalize(item.body);
-              if (!body) {
-                return null;
-              }
-
-              const trigger = normalizedTriggers.find(({ normalized }) =>
-                body.includes(normalized)
-              );
-
-              if (!trigger) {
-                return null;
-              }
-
-              return {
-                source: 'comment-body',
-                login,
-                trigger: trigger.raw,
-              };
-            };
 
             const reactionMatches = async (items, listReactions, buildParams = (item) => ({ comment_id: item.id })) => {
               for (const item of items) {
@@ -217,10 +173,6 @@ jobs:
               }),
             ]);
 
-            const matchedComment = [...issueComments, ...reviewComments, ...reviews]
-              .map((item) => ({ item, match: commentMatches(item) }))
-              .find(({ match }) => Boolean(match));
-
             const matchedReaction =
               (await issueReactionMatches()) ||
               (await reactionMatches(
@@ -232,10 +184,9 @@ jobs:
                 github.rest.reactions.listForPullRequestReviewComment
               ));
 
-            const matchedSource = matchedComment ||
-              (matchedReaction
-                ? { item: null, match: matchedReaction }
-                : null);
+            const matchedSource = matchedReaction
+              ? { item: null, match: matchedReaction }
+              : null;
 
             if (!matchedSource) {
               core.info(`Scanned ${issueComments.length} issue comments, ${reviewComments.length} review comments, and ${reviews.length} reviews for Codex approval signals.`);
