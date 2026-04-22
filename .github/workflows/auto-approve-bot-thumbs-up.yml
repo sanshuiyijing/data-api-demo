@@ -90,7 +90,19 @@ jobs:
               .map((value) => value.trim().toLowerCase())
               .filter(Boolean);
 
-            const hasP0Badge = (body) => /(^|\W)p0(\W|$)/i.test(body || '');
+            const getPriorityBadge = (body) => {
+              const firstNonEmptyLine = (body || '')
+                .split(/\r?\n/)
+                .map((line) => line.trim())
+                .find(Boolean);
+
+              if (!firstNonEmptyLine) {
+                return null;
+              }
+
+              const badgeMatch = firstNonEmptyLine.match(/^\[?(P\d+)\]?\b/i);
+              return badgeMatch ? badgeMatch[1].toUpperCase() : null;
+            };
 
             const getLatestMessage = (issueComments, reviewComments, reviews) => {
               const messages = [
@@ -285,7 +297,7 @@ jobs:
                 core.info('No comments or reviews found on the pull request.');
               } else if (!latestMessage.login || !botLogins.includes(latestMessage.login)) {
                 core.info(`Latest message is from ${latestMessage.login || 'unknown'}, not a configured bot. Skipping auto-approve.`);
-              } else if (hasP0Badge(latestMessage.body)) {
+              } else if (getPriorityBadge(latestMessage.body) === 'P0') {
                 core.info(`Latest bot message contains a P0 badge. Skipping auto-approve.`);
               } else {
                 matchedSource = {
