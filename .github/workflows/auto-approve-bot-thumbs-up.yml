@@ -1,31 +1,24 @@
 name: Auto Approve Bot Thumbs Up
 
 on:
-  pull_request:
-    types: [opened, reopened, synchronize, edited, ready_for_review]
-  issue_comment:
-    types: [created, edited]
   pull_request_review_comment:
-    types: [created, edited]
+    types: [created]
   pull_request_review:
-    types: [submitted, edited]
+    types: [submitted]
 
 permissions:
   contents: read
-  issues: write
+  issues: read
   pull-requests: write
 
 concurrency:
-  group: auto-approve-bot-thumbs-up-${{ github.event.pull_request.number || github.event.issue.number }}
+  group: auto-approve-bot-thumbs-up-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:
   auto-approve:
     if: >
-      github.event_name == 'pull_request' ||
-      (github.event_name == 'issue_comment' && github.event.issue.pull_request) ||
-      github.event_name == 'pull_request_review_comment' ||
-      github.event_name == 'pull_request_review'
+      contains(fromJSON('["codex[bot]","chatgpt-codex-connector[bot]"]'), github.event.sender.login)
     runs-on: ubuntu-latest
     steps:
       - name: Require approver token
@@ -36,29 +29,6 @@ jobs:
             echo "::error::Repository secret PR_APPROVER_TOKEN is required because the default GITHUB_TOKEN cannot approve pull requests in this repository."
             exit 1
           fi
-
-      - name: Ask Codex to review updated PR
-        if: github.event_name == 'pull_request' && github.event.action != 'opened'
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.PR_APPROVER_TOKEN }}
-          script: |
-            const { owner, repo } = context.repo;
-            const pullNumber = context.payload.pull_request?.number;
-
-            if (!pullNumber) {
-              core.info('No pull request number found for Codex review request comment.');
-              return;
-            }
-
-            await github.rest.issues.createComment({
-              owner,
-              repo,
-              issue_number: pullNumber,
-              body: '@codex review',
-            });
-
-            core.info(`Requested Codex review for PR #${pullNumber}.`);
 
       - name: Approve PR when Codex bot leaves approval signal
         uses: actions/github-script@v7
@@ -73,9 +43,7 @@ jobs:
             const marker = '<!-- auto-approve-bot-thumbs-up -->';
             const { owner, repo } = context.repo;
 
-            const pullNumber =
-              context.payload.pull_request?.number ??
-              context.payload.issue?.number;
+            const pullNumber = context.payload.pull_request?.number;
 
             if (!pullNumber) {
               core.info('No pull request number found in event payload.');
