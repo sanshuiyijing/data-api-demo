@@ -140,15 +140,21 @@ jobs:
                     },
                   });
 
+                  let matchedLogin = null;
                   const match = reactions.find((reaction) => {
                     const login = reaction.user?.login?.toLowerCase();
-                    return login && botLogins.includes(login) && reaction.content === reactionTrigger;
+                    if (login && botLogins.includes(login) && reaction.content === reactionTrigger) {
+                      matchedLogin = login;
+                      return true;
+                    }
+
+                    return false;
                   });
 
-                  if (match) {
+                  if (match && matchedLogin) {
                     return {
                       source: 'reaction',
-                      login: match.user.login.toLowerCase(),
+                      login: matchedLogin,
                       trigger: reactionTrigger,
                     };
                   }
@@ -176,15 +182,21 @@ jobs:
                     }
                   );
 
+                  let matchedLogin = null;
                   const match = reactions.find((reaction) => {
                     const login = reaction.user?.login?.toLowerCase();
-                    return login && botLogins.includes(login) && reaction.content === reactionTrigger;
+                    if (login && botLogins.includes(login) && reaction.content === reactionTrigger) {
+                      matchedLogin = login;
+                      return true;
+                    }
+
+                    return false;
                   });
 
-                  if (match) {
+                  if (match && matchedLogin) {
                     return {
                       source: 'review-reaction',
-                      login: match.user.login.toLowerCase(),
+                      login: matchedLogin,
                       trigger: reactionTrigger,
                     };
                   }
@@ -207,15 +219,21 @@ jobs:
                   },
                 });
 
+                let matchedLogin = null;
                 const match = reactions.find((reaction) => {
                   const login = reaction.user?.login?.toLowerCase();
-                  return login && botLogins.includes(login) && reaction.content === reactionTrigger;
+                  if (login && botLogins.includes(login) && reaction.content === reactionTrigger) {
+                    matchedLogin = login;
+                    return true;
+                  }
+
+                  return false;
                 });
 
-                if (match) {
+                if (match && matchedLogin) {
                   return {
                     source: 'issue-reaction',
-                    login: match.user.login.toLowerCase(),
+                    login: matchedLogin,
                     trigger: reactionTrigger,
                   };
                 }
