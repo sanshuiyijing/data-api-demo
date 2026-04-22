@@ -3,5 +3,5 @@ Enter "USE {database};" before entering your SQL statements.
 Type "--your question" + Enter to try out AI-generated SQL queries
 Declare a parameter like "Where id = ${arg}".
 */
-SELECT "Hello World";
-SELECT * from github_sample;
+DELETE FROM github_sample;
+SELECT 'deleted' AS status;
