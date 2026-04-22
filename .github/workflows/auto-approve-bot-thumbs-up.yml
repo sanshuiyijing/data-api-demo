@@ -1,0 +1,255 @@
+name: Auto Approve Bot Thumbs Up
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, edited, ready_for_review]
+  issue_comment:
+    types: [created, edited]
+  pull_request_review_comment:
+    types: [created, edited]
+  pull_request_review:
+    types: [submitted, edited]
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: write
+
+concurrency:
+  group: auto-approve-bot-thumbs-up-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: true
+
+jobs:
+  auto-approve:
+    if: >
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request) ||
+      github.event_name == 'pull_request_review_comment' ||
+      github.event_name == 'pull_request_review'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require approver token
+        env:
+          PR_APPROVER_TOKEN: ${{ secrets.PR_APPROVER_TOKEN }}
+        run: |
+          if [[ -z "$PR_APPROVER_TOKEN" ]]; then
+            echo "::error::Repository secret PR_APPROVER_TOKEN is required because the default GITHUB_TOKEN cannot approve pull requests in this repository."
+            exit 1
+          fi
+
+      - name: Approve PR when Codex bot leaves thumbs-up
+        uses: actions/github-script@v7
+        env:
+          CODEX_BOT_LOGINS: codex[bot],chatgpt-codex-connector[bot]
+          APPROVE_TRIGGERS: '👍,:+1:,:thumbsup:,:thumbs_up:,thumbs up'
+          PR_APPROVER_TOKEN: ${{ secrets.PR_APPROVER_TOKEN }}
+        with:
+          github-token: ${{ secrets.PR_APPROVER_TOKEN }}
+          script: |
+            const marker = '<!-- auto-approve-bot-thumbs-up -->';
+            const { owner, repo } = context.repo;
+
+            const pullNumber =
+              context.payload.pull_request?.number ??
+              context.payload.issue?.number;
+
+            if (!pullNumber) {
+              core.info('No pull request number found in event payload.');
+              return;
+            }
+
+            const pr = await github.rest.pulls.get({
+              owner,
+              repo,
+              pull_number: pullNumber,
+            });
+
+            const authenticatedUser = await github.rest.users.getAuthenticated();
+            const approverLogin = authenticatedUser.data.login?.toLowerCase();
+            const prAuthorLogin = pr.data.user?.login?.toLowerCase();
+
+            if (approverLogin && prAuthorLogin && approverLogin === prAuthorLogin) {
+              core.setFailed(
+                `PR_APPROVER_TOKEN belongs to ${authenticatedUser.data.login}, which is also the PR author. GitHub does not allow approving your own pull request. Use a different bot/service account token.`
+              );
+              return;
+            }
+
+            if (pr.data.draft) {
+              core.info('Pull request is draft. Skipping auto-approve.');
+              return;
+            }
+
+            const normalize = (value) =>
+              (value || '')
+                .toLowerCase()
+                .normalize('NFKC')
+                .replace(/[\u{1F3FB}-\u{1F3FF}]/gu, '')
+                .replace(/\uFE0F/gu, '');
+
+            const botLogins = (process.env.CODEX_BOT_LOGINS || '')
+              .split(',')
+              .map((value) => value.trim().toLowerCase())
+              .filter(Boolean);
+
+            const triggers = (process.env.APPROVE_TRIGGERS || '')
+              .split(',')
+              .map((value) => value.trim())
+              .filter(Boolean);
+
+            const normalizedTriggers = triggers.map((trigger) => ({
+              raw: trigger,
+              normalized: normalize(trigger),
+            }));
+
+            const commentMatches = (item) => {
+              const login = item.user?.login?.toLowerCase();
+              if (!login || !botLogins.includes(login)) {
+                return null;
+              }
+
+              const body = normalize(item.body);
+              if (!body) {
+                return null;
+              }
+
+              const trigger = normalizedTriggers.find(({ normalized }) =>
+                body.includes(normalized)
+              );
+
+              if (!trigger) {
+                return null;
+              }
+
+              return {
+                source: 'comment-body',
+                login,
+                trigger: trigger.raw,
+              };
+            };
+
+            const reactionMatches = async (items, listReactions, buildParams = (item) => ({ comment_id: item.id })) => {
+              for (const item of items) {
+                const reactions = await github.paginate(listReactions, {
+                  owner,
+                  repo,
+                  ...buildParams(item),
+                  content: '+1',
+                  per_page: 100,
+                  mediaType: {
+                    previews: ['squirrel-girl'],
+                  },
+                });
+
+                const match = reactions.find((reaction) => {
+                  const login = reaction.user?.login?.toLowerCase();
+                  return login && botLogins.includes(login) && reaction.content === '+1';
+                });
+
+                if (match) {
+                  return {
+                    source: 'reaction',
+                    login: match.user.login.toLowerCase(),
+                    trigger: '+1',
+                  };
+                }
+              }
+
+              return null;
+            };
+
+            const issueReactionMatches = async () => {
+              const reactions = await github.paginate(github.rest.reactions.listForIssue, {
+                owner,
+                repo,
+                issue_number: pullNumber,
+                content: '+1',
+                per_page: 100,
+                mediaType: {
+                  previews: ['squirrel-girl'],
+                },
+              });
+
+              const match = reactions.find((reaction) => {
+                const login = reaction.user?.login?.toLowerCase();
+                return login && botLogins.includes(login) && reaction.content === '+1';
+              });
+
+              if (!match) {
+                return null;
+              }
+
+              return {
+                source: 'issue-reaction',
+                login: match.user.login.toLowerCase(),
+                trigger: '+1',
+              };
+            };
+
+            const [issueComments, reviewComments, reviews] = await Promise.all([
+              github.paginate(github.rest.issues.listComments, {
+                owner,
+                repo,
+                issue_number: pullNumber,
+                per_page: 100,
+              }),
+              github.paginate(github.rest.pulls.listReviewComments, {
+                owner,
+                repo,
+                pull_number: pullNumber,
+                per_page: 100,
+              }),
+              github.paginate(github.rest.pulls.listReviews, {
+                owner,
+                repo,
+                pull_number: pullNumber,
+                per_page: 100,
+              }),
+            ]);
+
+            const matchedComment = [...issueComments, ...reviewComments, ...reviews]
+              .map((item) => ({ item, match: commentMatches(item) }))
+              .find(({ match }) => Boolean(match));
+
+            const matchedReaction =
+              (await issueReactionMatches()) ||
+              (await reactionMatches(
+                issueComments,
+                github.rest.reactions.listForIssueComment
+              )) ||
+              (await reactionMatches(
+                reviewComments,
+                github.rest.reactions.listForPullRequestReviewComment
+              ));
+
+            const matchedSource = matchedComment ||
+              (matchedReaction
+                ? { item: null, match: matchedReaction }
+                : null);
+
+            if (!matchedSource) {
+              core.info(`Scanned ${issueComments.length} issue comments, ${reviewComments.length} review comments, and ${reviews.length} reviews for Codex thumbs-up signals.`);
+              core.info('No matching Codex bot thumbs-up signal found.');
+              return;
+            }
+
+            const alreadyApproved = reviews.some(
+              (review) =>
+                review.state === 'APPROVED' &&
+                (review.body || '').includes(marker)
+            );
+
+            if (alreadyApproved) {
+              core.info('PR already has the workflow approval.');
+              return;
+            }
+
+            await github.rest.pulls.createReview({
+              owner,
+              repo,
+              pull_number: pullNumber,
+              event: 'APPROVE',
+              body: `${marker}\nApproved because ${matchedSource.match.login} posted a matching ${matchedSource.match.source}: ${matchedSource.match.trigger}.`,
+            });
+
+            core.info(`Approved PR #${pullNumber} after ${matchedSource.match.login} posted a matching ${matchedSource.match.source}: ${matchedSource.match.trigger}.`);
