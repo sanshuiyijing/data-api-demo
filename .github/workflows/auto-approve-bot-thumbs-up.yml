@@ -89,7 +89,6 @@ jobs:
         env:
           CODEX_BOT_LOGINS: codex[bot],chatgpt-codex-connector[bot]
           APPROVE_REACTIONS: '+1'
-          APPROVE_SUCCESS_PHRASES: "Didn't find any major issues.,no major issues found,no issues found,looks good to me"
         with:
           github-token: ${{ steps.approve-app-token.outputs.token }}
           script: |
@@ -124,11 +123,6 @@ jobs:
               .map((value) => value.trim().toLowerCase())
               .filter(Boolean);
 
-            const successPhrases = (process.env.APPROVE_SUCCESS_PHRASES || '')
-              .split(',')
-              .map((value) => value.trim().toLowerCase())
-              .filter(Boolean);
-
             const getPriorityBadge = (body) => {
               const firstNonEmptyLine = (body || '')
                 .split(/\r?\n/)
@@ -141,11 +135,6 @@ jobs:
 
               const badgeMatch = firstNonEmptyLine.match(/^\[?(P\d+)\]?\b/i);
               return badgeMatch ? badgeMatch[1].toUpperCase() : null;
-            };
-
-            const hasExplicitSuccessSignal = (body) => {
-              const normalizedBody = (body || '').toLowerCase();
-              return successPhrases.some((phrase) => normalizedBody.includes(phrase));
             };
 
             const getLatestMessage = (issueComments, reviewComments, reviews) => {
@@ -343,15 +332,13 @@ jobs:
                 core.info(`Latest message is from ${latestMessage.login || 'unknown'}, not a configured bot. Skipping auto-approve.`);
               } else if (getPriorityBadge(latestMessage.body) === 'P0') {
                 core.info(`Latest bot message contains a P0 badge. Skipping auto-approve.`);
-              } else if (!hasExplicitSuccessSignal(latestMessage.body)) {
-                core.info('Latest bot message is not an explicit success signal. Skipping auto-approve.');
               } else {
                 matchedSource = {
                   item: latestMessage,
                   match: {
                     source: latestMessage.kind,
                     login: latestMessage.login,
-                    trigger: 'latest-bot-success-message',
+                    trigger: 'latest-bot-message-without-p0',
                   },
                 };
               }
