@@ -6,5 +6,7 @@ Declare a parameter like "Where id = ${arg}".
 SELECT "Hello World";
 SELECT * from github_sample;
 
+
+
 -- DELETE FROM github_sample;
 -- SELECT 'deleted' AS status;
