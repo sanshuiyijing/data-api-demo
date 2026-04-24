@@ -58,7 +58,12 @@ jobs:
             }
 
             function bodyHasP0(body) {
-              return /(^|\W)P0(\W|$)/im.test(body || '');
+              return String(body || '')
+                .replace(/\r/g, '')
+                .split('\n')
+                .some((line) => {
+                  return /^\s*(?:[-*]\s+|>\s*)*(?:\*\*|__|`)?\[?P0\]?(?:\*\*|__|`)?(?=\s|:|-|$)/i.test(line);
+                });
             }
 
             function hasBotThumbsUp(reactions) {
