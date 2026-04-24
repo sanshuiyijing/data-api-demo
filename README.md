@@ -15,3 +15,5 @@ This repository includes one PR automation under `.github/workflows`:
 ### Review source
 
 Codex review generation is expected to come from the ChatGPT/Codex GitHub integration you enabled in settings. This repository workflow reacts to Codex output and reports the gate result through the `codex-review-gate` required status check.
+
+this is a test repo.

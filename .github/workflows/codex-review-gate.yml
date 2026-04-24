@@ -57,6 +57,22 @@ jobs:
               return botLogins.has(String(login || '').toLowerCase());
             }
 
+            function escapeRegExp(value) {
+              return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            }
+
+            function bodyHasBotThumbsUp(body) {
+              const text = String(body || '');
+
+              return Array.from(botLogins).some((login) => {
+                const pattern = new RegExp(
+                  `${escapeRegExp(login)}\\s+reacted\\s+with\\s+thumbs\\s*up\\s+emoji`,
+                  'i'
+                );
+                return pattern.test(text);
+              });
+            }
+
             function bodyHasP0(body) {
               return String(body || '')
                 .replace(/\r/g, '')
@@ -115,6 +131,12 @@ jobs:
                 pull_number: prNumber,
               });
 
+              const allBodies = [
+                ...issueComments.map((comment) => comment.body || ''),
+                ...reviewComments.map((comment) => comment.body || ''),
+                ...reviews.map((review) => review.body || ''),
+              ];
+
               const botBodies = [];
 
               for (const comment of issueComments) {
@@ -138,14 +160,16 @@ jobs:
               const hasBotComments = botBodies.length > 0;
               const hasBlockingP0 = botBodies.some(bodyHasP0);
 
-              let botApproved = false;
+              let botApproved = allBodies.some(bodyHasBotThumbsUp);
 
-              const issueReactions = await listAll(github.rest.reactions.listForIssue, {
-                owner,
-                repo,
-                issue_number: prNumber,
-              });
-              botApproved = hasBotThumbsUp(issueReactions);
+              if (!botApproved) {
+                const issueReactions = await listAll(github.rest.reactions.listForIssue, {
+                  owner,
+                  repo,
+                  issue_number: prNumber,
+                });
+                botApproved = hasBotThumbsUp(issueReactions);
+              }
 
               for (const comment of issueComments) {
                 if (botApproved || !(comment.reactions?.total_count > 0)) {
