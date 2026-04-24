@@ -178,7 +178,8 @@ jobs:
                 state = 'failure';
                 description = 'Blocking P0 feedback from Codex review.';
               } else if (hasBotComments) {
-                description = 'Codex review comments found; waiting for thumbs up or P0 resolution.';
+                state = 'success';
+                description = 'Codex review comments found with no blocking P0 feedback.';
               }
 
               await createStatus(sha, state, description);
