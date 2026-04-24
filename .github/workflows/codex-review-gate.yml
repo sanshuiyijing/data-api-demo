@@ -1,0 +1,248 @@
+name: codex-review-gate
+
+on:
+  pull_request_target:
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - ready_for_review
+      - edited
+  issue_comment:
+    types:
+      - created
+      - edited
+      - deleted
+  pull_request_review_comment:
+    types:
+      - created
+      - edited
+      - deleted
+  pull_request_review:
+    types:
+      - submitted
+      - edited
+      - dismissed
+  repository_dispatch:
+    types:
+      - codex_review_gate
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+  statuses: write
+
+jobs:
+  codex-review-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Evaluate Codex review gate
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const statusContext = 'codex-review-gate';
+            const botLogins = new Set([
+              'chatgpt-codex-connector',
+              'chatgpt-codex-connector[bot]',
+            ]);
+            const runUrl = `${process.env.GITHUB_SERVER_URL || 'https://github.com'}/${owner}/${repo}/actions/runs/${context.runId}`;
+
+            function isCodexBot(login) {
+              return botLogins.has(String(login || '').toLowerCase());
+            }
+
+            function bodyHasP0(body) {
+              return /(^|\W)P0(\W|$)/im.test(body || '');
+            }
+
+            function hasBotThumbsUp(reactions) {
+              return reactions.some((reaction) => {
+                return reaction.content === '+1' && isCodexBot(reaction.user?.login);
+              });
+            }
+
+            async function listAll(listMethod, params) {
+              return github.paginate(listMethod, {
+                ...params,
+                per_page: 100,
+              });
+            }
+
+            async function createStatus(sha, state, description) {
+              await github.rest.repos.createCommitStatus({
+                owner,
+                repo,
+                sha,
+                state,
+                context: statusContext,
+                description: description.slice(0, 140),
+                target_url: runUrl,
+              });
+            }
+
+            async function evaluatePullRequest(prNumber) {
+              const { data: pullRequest } = await github.rest.pulls.get({
+                owner,
+                repo,
+                pull_number: prNumber,
+              });
+
+              const sha = pullRequest.head.sha;
+              const issueComments = await listAll(github.rest.issues.listComments, {
+                owner,
+                repo,
+                issue_number: prNumber,
+              });
+              const reviewComments = await listAll(github.rest.pulls.listReviewComments, {
+                owner,
+                repo,
+                pull_number: prNumber,
+              });
+              const reviews = await listAll(github.rest.pulls.listReviews, {
+                owner,
+                repo,
+                pull_number: prNumber,
+              });
+
+              const botBodies = [];
+
+              for (const comment of issueComments) {
+                if (isCodexBot(comment.user?.login)) {
+                  botBodies.push(comment.body || '');
+                }
+              }
+
+              for (const comment of reviewComments) {
+                if (isCodexBot(comment.user?.login)) {
+                  botBodies.push(comment.body || '');
+                }
+              }
+
+              for (const review of reviews) {
+                if (isCodexBot(review.user?.login)) {
+                  botBodies.push(review.body || '');
+                }
+              }
+
+              const hasBotComments = botBodies.length > 0;
+              const hasBlockingP0 = botBodies.some(bodyHasP0);
+
+              let botApproved = false;
+
+              const issueReactions = await listAll(github.rest.reactions.listForIssue, {
+                owner,
+                repo,
+                issue_number: prNumber,
+              });
+              botApproved = hasBotThumbsUp(issueReactions);
+
+              for (const comment of issueComments) {
+                if (botApproved || !(comment.reactions?.total_count > 0)) {
+                  continue;
+                }
+
+                const reactions = await listAll(github.rest.reactions.listForIssueComment, {
+                  owner,
+                  repo,
+                  comment_id: comment.id,
+                });
+                botApproved = hasBotThumbsUp(reactions);
+              }
+
+              for (const comment of reviewComments) {
+                if (botApproved || !(comment.reactions?.total_count > 0)) {
+                  continue;
+                }
+
+                const reactions = await listAll(github.rest.reactions.listForPullRequestReviewComment, {
+                  owner,
+                  repo,
+                  comment_id: comment.id,
+                });
+                botApproved = hasBotThumbsUp(reactions);
+              }
+
+              let state = 'pending';
+              let description = 'Waiting for Codex review comments or a thumbs up reaction.';
+
+              if (botApproved) {
+                state = 'success';
+                description = 'Codex review approved with a thumbs up reaction.';
+              } else if (hasBlockingP0) {
+                state = 'failure';
+                description = 'Blocking P0 feedback from Codex review.';
+              } else if (hasBotComments) {
+                description = 'Codex review comments found; waiting for thumbs up or P0 resolution.';
+              }
+
+              await createStatus(sha, state, description);
+
+              core.info(`PR #${prNumber}: ${state} - ${description}`);
+              return { prNumber, sha, state, description };
+            }
+
+            async function resolvePullRequestNumbers() {
+              switch (context.eventName) {
+                case 'pull_request_target':
+                case 'pull_request_review':
+                case 'pull_request_review_comment':
+                  return [context.payload.pull_request.number];
+                case 'issue_comment':
+                  return context.payload.issue?.pull_request ? [context.payload.issue.number] : [];
+                case 'repository_dispatch': {
+                  const pullRequestNumber = Number(context.payload.client_payload?.pull_request_number);
+                  return Number.isInteger(pullRequestNumber) && pullRequestNumber > 0 ? [pullRequestNumber] : [];
+                }
+                case 'workflow_dispatch':
+                case 'schedule': {
+                  const pullRequests = await listAll(github.rest.pulls.list, {
+                    owner,
+                    repo,
+                    state: 'open',
+                  });
+                  return pullRequests.map((pullRequest) => pullRequest.number);
+                }
+                default:
+                  return [];
+              }
+            }
+
+            const pullRequestNumbers = await resolvePullRequestNumbers();
+
+            if (pullRequestNumbers.length === 0) {
+              core.info(`No pull requests to evaluate for event ${context.eventName}.`);
+              return;
+            }
+
+            const results = [];
+
+            for (const prNumber of pullRequestNumbers) {
+              try {
+                results.push(await evaluatePullRequest(prNumber));
+              } catch (error) {
+                core.warning(`PR #${prNumber} evaluation failed: ${error.message}`);
+
+                try {
+                  const { data: pullRequest } = await github.rest.pulls.get({
+                    owner,
+                    repo,
+                    pull_number: prNumber,
+                  });
+                  await createStatus(
+                    pullRequest.head.sha,
+                    'pending',
+                    'Codex review gate could not be evaluated; retrying on the next event.'
+                  );
+                } catch (statusError) {
+                  core.warning(`PR #${prNumber} fallback status failed: ${statusError.message}`);
+                }
+              }
+            }
+
+            core.setOutput('results', JSON.stringify(results));
