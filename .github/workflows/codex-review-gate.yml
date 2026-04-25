@@ -26,9 +26,13 @@ on:
   repository_dispatch:
     types:
       - codex_review_gate
-  schedule:
-    - cron: '*/10 * * * *'
+  
   workflow_dispatch:
+    inputs:
+      pull_request_number:
+        description: Pull request number to re-evaluate. Leave empty to scan all open pull requests.
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -229,7 +233,12 @@ jobs:
                   const pullRequestNumber = Number(context.payload.client_payload?.pull_request_number);
                   return Number.isInteger(pullRequestNumber) && pullRequestNumber > 0 ? [pullRequestNumber] : [];
                 }
-                case 'workflow_dispatch':
+                case 'workflow_dispatch': {
+                  const pullRequestNumber = Number(context.payload.inputs?.pull_request_number);
+                  if (Number.isInteger(pullRequestNumber) && pullRequestNumber > 0) {
+                    return [pullRequestNumber];
+                  }
+                }
                 case 'schedule': {
                   const pullRequests = await listAll(github.rest.pulls.list, {
                     owner,
