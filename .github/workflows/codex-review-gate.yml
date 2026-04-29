@@ -1,6 +1,8 @@
 name: Auto Approve Bot Thumbs Up
 
 on:
+  pull_request:
+    types: [labeled, unlabeled]
   pull_request_review:
     types: [submitted]
 
@@ -8,6 +10,7 @@ permissions:
   contents: read
   issues: read
   pull-requests: write
+  statuses: write
 
 concurrency:
   group: auto-approve-bot-thumbs-up-${{ github.event.pull_request.number }}
@@ -15,8 +18,6 @@ concurrency:
 
 jobs:
   auto-approve:
-    if: >
-      github.event.sender.login == 'chatgpt-codex-connector[bot]'
     runs-on: ubuntu-latest
     steps:
       - name: Require GitHub App credentials
@@ -45,6 +46,7 @@ jobs:
           github-token: ${{ steps.approve-app-token.outputs.token }}
           script: |
             const marker = '<!-- auto-approve-bot-thumbs-up -->';
+            const statusContext = 'codex-review-gate';
             const { owner, repo } = context.repo;
 
             const pullNumber = context.payload.pull_request?.number;
@@ -64,6 +66,35 @@ jobs:
               core.info('Pull request is draft. Skipping auto-approve.');
               return;
             }
+
+            const headSha = pr.data.head?.sha;
+            const labels = (pr.data.labels || [])
+              .map((label) => (typeof label === 'string' ? label : label.name || ''))
+              .map((label) => label.trim().toLowerCase())
+              .filter(Boolean);
+
+            const hasTaskLabel = labels.includes('task');
+            const hasNoCtLabel = labels.includes('no-ct');
+            const shouldUseCodexSignal = hasTaskLabel && hasNoCtLabel;
+
+            const setGateStatus = async (state, description) => {
+              if (!headSha) {
+                core.info(`Skipping ${statusContext} status update because the PR head SHA is unavailable.`);
+                return;
+              }
+
+              await github.rest.repos.createCommitStatus({
+                owner,
+                repo,
+                sha: headSha,
+                state,
+                context: statusContext,
+                description,
+                target_url: `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`,
+              });
+
+              core.info(`Set ${statusContext} to ${state}: ${description}`);
+            };
 
             const botLogins = (process.env.CODEX_BOT_LOGINS || '')
               .split(',')
@@ -121,6 +152,67 @@ jobs:
 
               return messages[0];
             };
+
+            const getLatestReviewStatesByUser = (items) => {
+              const latestReviewByUser = new Map();
+
+              for (const item of items) {
+                const login = item.user?.login?.toLowerCase();
+                const timestamp = item.submitted_at || item.updated_at || item.created_at;
+
+                if (!login || !timestamp) {
+                  continue;
+                }
+
+                const current = latestReviewByUser.get(login);
+
+                if (!current || new Date(timestamp).getTime() > new Date(current.timestamp).getTime()) {
+                  latestReviewByUser.set(login, {
+                    state: item.state,
+                    body: item.body || '',
+                    timestamp,
+                  });
+                }
+              }
+
+              return latestReviewByUser;
+            };
+
+            const [issueComments, reviewComments, reviews] = await Promise.all([
+              github.paginate(github.rest.issues.listComments, {
+                owner,
+                repo,
+                issue_number: pullNumber,
+                per_page: 100,
+              }),
+              github.paginate(github.rest.pulls.listReviewComments, {
+                owner,
+                repo,
+                pull_number: pullNumber,
+                per_page: 100,
+              }),
+              github.paginate(github.rest.pulls.listReviews, {
+                owner,
+                repo,
+                pull_number: pullNumber,
+                per_page: 100,
+              }),
+            ]);
+
+            const latestReviewsByUser = getLatestReviewStatesByUser(reviews);
+            const hasCurrentApproval = Array.from(latestReviewsByUser.values()).some(
+              (review) => review.state === 'APPROVED'
+            );
+
+            if (!shouldUseCodexSignal) {
+              if (hasCurrentApproval) {
+                await setGateStatus('success', 'PR already has an approval review.');
+              } else {
+                await setGateStatus('pending', 'Waiting for an approval review while task/no-ct labels are absent.');
+              }
+
+              return;
+            }
 
             const reactionMatches = async (items, listReactions, buildParams = (item) => ({ comment_id: item.id })) => {
               for (const item of items) {
@@ -238,27 +330,6 @@ jobs:
               return null;
             };
 
-            const [issueComments, reviewComments, reviews] = await Promise.all([
-              github.paginate(github.rest.issues.listComments, {
-                owner,
-                repo,
-                issue_number: pullNumber,
-                per_page: 100,
-              }),
-              github.paginate(github.rest.pulls.listReviewComments, {
-                owner,
-                repo,
-                pull_number: pullNumber,
-                per_page: 100,
-              }),
-              github.paginate(github.rest.pulls.listReviews, {
-                owner,
-                repo,
-                pull_number: pullNumber,
-                per_page: 100,
-              }),
-            ]);
-
             const matchedReaction =
               (await issueReactionMatches()) ||
               (await reactionMatches(
@@ -299,17 +370,25 @@ jobs:
             if (!matchedSource) {
               core.info(`Scanned ${issueComments.length} issue comments, ${reviewComments.length} review comments, and ${reviews.length} reviews for Codex approval signals.`);
               core.info('No matching Codex bot approval signal found.');
+
+              if (hasCurrentApproval) {
+                await setGateStatus('success', 'PR already has an approval review.');
+              } else {
+                await setGateStatus('pending', 'Waiting for a matching Codex bot approval signal.');
+              }
+
               return;
             }
 
-            const alreadyApproved = reviews.some(
+            const alreadyApproved = Array.from(latestReviewsByUser.values()).some(
               (review) =>
                 review.state === 'APPROVED' &&
-                (review.body || '').includes(marker)
+                review.body.includes(marker)
             );
 
             if (alreadyApproved) {
               core.info('PR already has the workflow approval.');
+              await setGateStatus('success', 'PR already has the workflow approval.');
               return;
             }
 
@@ -322,3 +401,4 @@ jobs:
             });
 
             core.info(`Approved PR #${pullNumber} after ${matchedSource.match.login} posted a matching ${matchedSource.match.source}: ${matchedSource.match.trigger}.`);
+            await setGateStatus('success', 'Approved after a matching Codex bot signal.');
